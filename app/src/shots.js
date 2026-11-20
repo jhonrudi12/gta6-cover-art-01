@@ -1,22 +1,14 @@
-// Fixed scenes for screenshots: ?shot=editor shows the editor with sample photos
-// loaded; ?shot=cover shows the exported cover full-frame with no controls.
-// `photo` picks the sample, `caption` the title, `layout`, `grade` and `size`
-// make each scene deterministic. window.__shotReady is set once painted.
-export async function runShot(shot, query, helpers) {
-  const photo = query.get('photo') || 'boulevard';
-  const caption = query.get('caption') || 'Vice Coast';
-  const layout = query.get('layout') || (shot === 'cover' ? 'grid9' : 'hero3');
-  const grade = query.get('grade') || 'sunset';
-  const size = query.get('size') || (shot === 'cover' ? '1920x1080' : '1080x1080');
-  const subtitle = query.get('subtitle') || 'one last sunset heist';
+// Fixed scenes for screenshots: ?shot=editor shows the editor with a sample photo
+// loaded; ?shot=cover hides the controls and shows the cover alone, at the size
+// named by ?size=. `photo` picks the sample (samples/<photo>.jpg), `caption` the
+// words, `layout` and `grade` the look. window.__shotReady is set once painted.
 
+/** Runs one shot scene, calling `load` with the sample URL and caption. */
+export async function runShot(shot, query, load) {
   if (shot === 'cover') document.body.classList.add('shot-cover');
-
-  helpers.applyScene({ layout, grade, title: caption, subtitle, size });
-  await helpers.loadSamples(photo);
-  helpers.renderNow();
-
-  // Two frames so the canvas paint lands, then signal readiness.
+  const photo = query.get('photo') ?? 'pier';
+  const caption = query.get('caption') ?? 'Vice Coast';
+  await load(`samples/${photo}.jpg`, caption);
   await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
   window.__shotReady = true;
 }
