@@ -4,29 +4,48 @@
 [![rank](https://make.fun/badge/gta6-cover-art-01/jhonrudi12/gta6-cover-art-01/rank.svg)](https://make.fun/bounty/gta6-cover-art-01)
 [![reward](https://make.fun/badge/gta6-cover-art-01/jhonrudi12/gta6-cover-art-01/reward.svg)](https://make.fun/bounty/gta6-cover-art-01)
 
-An offline web app that turns a person's photo and a caption into cover art in the style of GTA 6's posters — the multi-panel cover look with bold lettering and a Vice City sunset or neon colour grade — and exports it as a PNG to share. It runs offline in a desktop browser from its own static files: the photos never leave the machine. Built for the [make.fun bounty "Make GTA 6 Cover Art"](https://make.fun/bounty/gta6-cover-art-01).
+An offline web app that turns a person's photo and a caption into cover art in the
+style of a Vice City poster — the multi-panel look with bold lettering and a sunset
+or neon colour grade — and exports it as a PNG to share. It runs offline in a
+desktop browser from its own static files, and the photos never leave the machine.
+Built for the [make.fun bounty "Make GTA 6 Cover Art"](https://make.fun/bounty/gta6-cover-art-01).
 
 ## What it does
 
-- **5 multi-panel layouts:** Hero+3, 4-panel grid, 9-panel grid, tilted snapshot collage, full-bleed.
-- **5 colour grades:** Vice Sunset, Neon Nights, Golden Hour, Midnight Purple, Palm Teal — real 256-entry LUT gradient maps with grain, vignette and intensity control.
-- **Any photo:** multi-photo picker with per-panel assign, drag, zoom and flip; fill-all vs one-per-panel modes; cropping and positioning per panel.
-- **Lettering:** editable Anton title (gradient + outline + shadow) and Pacifico subtitle, halftone title band, "VICE COAST" badge and a 5-star HEAT meter.
-- **Export:** PNG in post sizes 1080×1080, 1080×1350 and 1920×1080.
+- **5 multi-panel layouts:** Hero+3, 4-panel grid, 9-panel grid, tilted snapshot
+  collage, full bleed — each drawn from your photos, not a fixed frame.
+- **5 colour grades:** Vice Sunset, Neon Nights, Golden Hour, Midnight Purple,
+  Palm Teal — real 256-entry per-channel LUTs with a strength slider, plus film
+  grain and a vignette.
+- **Any photo:** upload your own (up to 6), or use the two built-in samples. Click
+  any panel in the live preview to crop it: pick its photo, zoom, pan, flip — or
+  fill every panel with one photo.
+- **Lettering:** editable Anton title with a sunset gradient, dark outline and
+  shadow over a halftone band, a Pacifico subtitle, a "VICE COAST" badge and a
+  five-star heat meter.
+- **Export:** one click downloads a PNG in 1080×1080, 1080×1350 or 1920×1080.
 
-All art, lettering and fonts are original or OFL-licensed (Anton, Pacifico) — no Rockstar Games logo, artwork or font.
+All art and lettering is original, and both fonts (Anton, Pacifico) are SIL Open
+Font License files vendored under `app/fonts/` — no Rockstar Games logo, artwork
+or font is used anywhere.
 
 ## Run it
 
 ```bash
-# Regenerate app/ + screenshots/ + dossier.json (deterministic)
-mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
-
 # Serve the app and open it in desktop Chrome
-npx serve out/app   # or any static server pointed at out/app
+node serve.ts
+# then open http://localhost:8080
 ```
 
-Or open `app/index.html` from a static server directly — the app works fully offline, with no network requests.
+Or point any static server at `app/` — the app works fully offline, with no
+network requests.
+
+## Hand it in
+
+```bash
+# Regenerate app/ + screenshots/ + dossier.json (deterministic)
+mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
+```
 
 ## License
 
