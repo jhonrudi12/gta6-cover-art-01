@@ -1,74 +1,56 @@
-// A tiny static server for app/ (Node 22, standard library only), so the cover
-// maker can be tried locally without a build step: `node serve.ts` serves app/ on
-// http://localhost:8080. It sends the MIME types an offline web app needs, refuses
-// any path outside app/, and otherwise does nothing clever: a development
-// convenience, not a web server for the internet.
+// Vice Coast Cover Studio — local static server.
+// Serves app/ over HTTP so the app can be opened in a desktop browser.
+// No build step, no network calls: every file served comes from app/.
+// Usage: node serve.ts [port]   (default port 4173, or $PORT)
 import { createReadStream, statSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { extname, join, normalize, resolve, sep } from 'node:path';
+import { extname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(fileURLToPath(new URL('./app', import.meta.url)));
-const args = process.argv.slice(2);
-const portIndex = args.indexOf('--port');
-const requested = portIndex === -1 ? 8080 : Number(args[portIndex + 1]);
-const port = Number.isInteger(requested) && requested > 0 && requested < 65536 ? requested : 8080;
+const port = Number(process.argv[2] || process.env.PORT || 4173);
 
-const MIME = {
+const TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.mjs': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
-  '.gif': 'image/gif',
-  '.webp': 'image/webp',
-  '.svg': 'image/svg+xml',
-  '.ico': 'image/x-icon',
-  '.woff2': 'font/woff2',
-  '.woff': 'font/woff',
   '.ttf': 'font/ttf',
-  '.otf': 'font/otf',
-  '.bin': 'application/octet-stream',
-  '.wasm': 'application/wasm',
-  '.wav': 'audio/wav',
-  '.mp3': 'audio/mpeg',
-  '.ogg': 'audio/ogg',
   '.txt': 'text/plain; charset=utf-8',
 };
 
-createServer((request, response) => {
-  const url = new URL(request.url ?? '/', 'http://localhost');
-  let pathname;
+const server = createServer((req, res) => {
+  const path = decodeURIComponent(new URL(req.url || '/', 'http://localhost').pathname);
+  const file = join(root, path === '/' ? 'index.html' : normalize(path));
+  if (!file.startsWith(root)) {
+    res.writeHead(403);
+    res.end('forbidden');
+    return;
+  }
+  let stat;
   try {
-    pathname = decodeURIComponent(url.pathname);
+    stat = statSync(file);
   } catch {
-    response.writeHead(400).end('bad request');
+    res.writeHead(404);
+    res.end('not found');
     return;
   }
-  if (pathname.endsWith('/')) pathname += 'index.html';
-  const file = resolve(join(root, normalize(pathname)));
-  if (file !== root && !file.startsWith(root + sep)) {
-    response.writeHead(403).end('forbidden');
+  if (!stat.isFile()) {
+    res.writeHead(404);
+    res.end('not found');
     return;
   }
-  let size;
-  try {
-    const stats = statSync(file);
-    if (!stats.isFile()) throw new Error('not a file');
-    size = stats.size;
-  } catch {
-    response.writeHead(404).end('not found');
-    return;
-  }
-  response.writeHead(200, {
-    'content-type': MIME[extname(file).toLowerCase()] ?? 'application/octet-stream',
-    'content-length': size,
-    'cache-control': 'no-store',
+  res.writeHead(200, {
+    'content-type': TYPES[extname(file)] || 'application/octet-stream',
+    'content-length': stat.size,
   });
-  createReadStream(file).pipe(response);
-}).listen(port, '127.0.0.1', () => {
-  console.log(`app/ is on http://localhost:${port}`);
+  createReadStream(file).pipe(res);
+});
+
+server.listen(port, () => {
+  console.log(`Vice Coast Cover Studio at http://localhost:${port}/`);
 });
