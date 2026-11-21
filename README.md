@@ -1,8 +1,8 @@
 # Vice Coast Cover Studio
 
-[![MakeFun](https://img.shields.io/badge/make.fun-gta6--cover--art--01-ff2e88)](https://make.fun/competitions/gta6-cover-art-01)
-[![Offline](https://img.shields.io/badge/offline-no%20upload%20%E2%80%A2%20no%20network-2ee6c8)](https://make.fun/competitions/gta6-cover-art-01)
-[![Export](https://img.shields.io/badge/export-PNG%201080%C3%971080%20%E2%80%A2%201080%C3%971350%20%E2%80%A2%201920%C3%971080-ffd23e)](https://make.fun/competitions/gta6-cover-art-01)
+[![make.fun](https://make.fun/badge/gta6-cover-art-01.svg)](https://make.fun/bounty/gta6-cover-art-01)
+[![rank](https://make.fun/badge/gta6-cover-art-01/jhonrudi12/gta6-cover-art-01/rank.svg)](https://make.fun/bounty/gta6-cover-art-01)
+[![reward](https://make.fun/badge/gta6-cover-art-01/jhonrudi12/gta6-cover-art-01/reward.svg)](https://make.fun/bounty/gta6-cover-art-01)
 
 An offline web app that turns your photos and a caption into a Vice City-style
 multi-panel cover poster — the GTA VI poster look, drawn from your own photos,
