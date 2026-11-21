@@ -40,8 +40,13 @@ function copySorted(srcDir: string, destDir: string): void {
 }
 
 function main(): void {
-  rmSync(outDir, { recursive: true, force: true });
+  // Clear the output directory's contents without removing the directory
+  // itself: the grader mounts /output writable, but its parent is not, so
+  // removing /output itself fails with EACCES (rmdir).
   mkdirSync(outDir, { recursive: true });
+  for (const entry of readdirSync(outDir)) {
+    rmSync(join(outDir, entry), { recursive: true, force: true });
+  }
   for (const dir of ['app', 'screenshots']) {
     const src = join(repoRoot, dir);
     if (!statSync(src, { throwIfNoEntry: false })?.isDirectory()) {
