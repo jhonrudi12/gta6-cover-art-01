@@ -1,298 +1,292 @@
-// Renders the cover onto a canvas: photo panels, a 256-entry LUT colour grade,
-// film grain and vignette, then the bold caption lettering, badge and heat meter.
-// Everything drawn here is original art made from the user's own photos.
+// Cover renderer for Vice Coast Cover Studio.
+// Draws the whole poster onto any canvas: the live preview and the export PNG
+// share this one code path, so what you see is exactly what you download.
+import { buildLuts, applyLuts, gradeById } from './grades.js';
+import { layoutById, panelRects } from './layouts.js';
 
-import { buildGradeLUT, gradeById } from './grades.js';
-import { layoutPanels, panelCount } from './layouts.js';
+const grainTile = makeGrainTile();
 
-/** The three post sizes the app exports. */
-export const EXPORT_SIZES = [
-  { id: '1080x1080', label: 'Square 1080 x 1080', w: 1080, h: 1080 },
-  { id: '1080x1350', label: 'Portrait 1080 x 1350', w: 1080, h: 1350 },
-  { id: '1920x1080', label: 'Wide 1920 x 1080', w: 1920, h: 1080 },
-];
-
-/** A small deterministic random generator, so grain looks the same every render. */
-export function mulberry32(seed) {
-  let a = seed >>> 0;
-  return () => {
-    a |= 0; a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-/** Waits until the two vendored OFL fonts are usable on canvas. */
-export async function ensureCoverFonts() {
-  try {
-    await Promise.all([
-      document.fonts.load('100px Anton'),
-      document.fonts.load('40px Pacifico'),
-      document.fonts.ready,
-    ]);
-  } catch {
-    // The cover still draws with fallback fonts if a font fails to load.
+function makeGrainTile() {
+  const c = document.createElement('canvas');
+  c.width = 128;
+  c.height = 128;
+  const x = c.getContext('2d');
+  const img = x.createImageData(128, 128);
+  for (let i = 0; i < img.data.length; i += 4) {
+    const v = 110 + Math.floor(Math.random() * 90);
+    img.data[i] = v;
+    img.data[i + 1] = v;
+    img.data[i + 2] = v;
+    img.data[i + 3] = 255;
   }
+  x.putImageData(img, 0, 0);
+  return c;
 }
 
-/**
- * Draws the whole cover. `state` holds layout, grade, caption, subtitle, badge,
- * stars and per-panel settings; `photos` is the list of loaded images, indexed
- * by each panel's `photo` field.
- */
-export function drawCoverArt(canvas, state, photos) {
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  const w = canvas.width;
-  const h = canvas.height;
-  const grade = gradeById(state.grade);
-  const scale = w / 1080;
-
-  // Backdrop: deep dusk purple, so gaps and collage edges read as poster board.
-  ctx.fillStyle = '#1c1030';
-  ctx.fillRect(0, 0, w, h);
-
-  const panels = layoutPanels(state.layout, w, h);
-  const count = panelCount(state.layout);
-  for (let i = 0; i < count; i++) {
-    const panel = panels[i];
-    const setting = state.panels[i] ?? { photo: 0, zoom: 1, ox: 0, oy: 0, flip: false };
-    const img = photos[setting.photo] ?? photos[0] ?? null;
-    drawPhotoPanel(ctx, img, panel, setting, state.layout === 'collage', scale);
-  }
-
-  applyGradeLUT(ctx, w, h, buildGradeLUT(grade), state.gradeAmount);
-  addVignette(ctx, w, h);
-  addFilmGrain(ctx, w, h, 20261120);
-
-  drawBadgeAndHeat(ctx, state, w, h, grade, scale);
-  drawTitleBlock(ctx, state, w, h, grade, scale);
-}
-
-/** Draws one photo into one panel: cover-fit, zoom, pan and optional flip. */
-export function drawPhotoPanel(ctx, img, panel, setting, snapshotBorder, scale) {
-  ctx.save();
-  const cx = panel.x + panel.w / 2;
-  const cy = panel.y + panel.h / 2;
-  ctx.translate(cx, cy);
-  if (panel.rot) ctx.rotate((panel.rot * Math.PI) / 180);
-  ctx.translate(-cx, -cy);
+function drawStar(ctx, cx, cy, r, fill) {
   ctx.beginPath();
-  ctx.rect(panel.x, panel.y, panel.w, panel.h);
-  ctx.clip();
-  if (img) {
-    const zoom = setting.zoom || 1;
-    const base = Math.max(panel.w / img.naturalWidth, panel.h / img.naturalHeight) * zoom;
-    const pw = img.naturalWidth * base;
-    const ph = img.naturalHeight * base;
-    const ox = (setting.ox || 0) * panel.w;
-    const oy = (setting.oy || 0) * panel.h;
-    // When a tall photo is cropped into a short panel, bias the crop toward the
-    // top of the photo, where faces usually are, instead of centring blindly.
-    const topBias = ph > panel.h ? (ph - panel.h) * 0.28 : 0;
-    ctx.save();
-    if (setting.flip) {
-      ctx.translate(panel.x + panel.w / 2, 0);
-      ctx.scale(-1, 1);
-      ctx.translate(-(panel.x + panel.w / 2), 0);
+  for (let i = 0; i < 10; i++) {
+    const ang = -Math.PI / 2 + (i * Math.PI) / 5;
+    const rad = i % 2 === 0 ? r : r * 0.45;
+    const px = cx + Math.cos(ang) * rad;
+    const py = cy + Math.sin(ang) * rad;
+    if (i === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+  ctx.fillStyle = fill;
+  ctx.fill();
+  ctx.lineWidth = Math.max(1, r * 0.08);
+  ctx.strokeStyle = 'rgba(20,5,30,0.85)';
+  ctx.stroke();
+}
+
+// Draw one photo into a panel rect, honouring its crop (zoom / pan / flip),
+// then grade the panel pixels with the grade LUTs.
+function drawPanel(ctx, photo, rect, crop, luts, sat) {
+  const { x, y, w, h } = rect;
+  if (!photo || w <= 0 || h <= 0) return;
+  const iw = photo.naturalWidth || photo.width;
+  const ih = photo.naturalHeight || photo.height;
+  const pad = rect.border || 0;
+  const pw = w - pad * 2;
+  const ph = h - pad * 2;
+
+  // Render the photo (graded) to a temp canvas at panel resolution.
+  const tmp = document.createElement('canvas');
+  const scale = Math.min(1, 900 / Math.max(pw, ph));
+  tmp.width = Math.max(2, Math.round(pw * scale));
+  tmp.height = Math.max(2, Math.round(ph * scale));
+  const t = tmp.getContext('2d');
+  const base = Math.max(tmp.width / iw, tmp.height / ih) * (crop.zoom || 1);
+  const dw = iw * base;
+  const dh = ih * base;
+  const dx = (tmp.width - dw) * (crop.panX ?? 0.5);
+  const dy = (tmp.height - dh) * (crop.panY ?? 0.5);
+  t.save();
+  if (crop.flip) {
+    t.translate(tmp.width / 2, 0);
+    t.scale(-1, 1);
+    t.translate(-tmp.width / 2, 0);
+  }
+  t.drawImage(photo, dx, dy, dw, dh);
+  t.restore();
+  const img = t.getImageData(0, 0, tmp.width, tmp.height);
+  applyLuts(img, luts, sat);
+  t.putImageData(img, 0, 0);
+
+  // Place the graded panel, with rotation / snapshot border when the layout asks.
+  ctx.save();
+  if (rect.rot) {
+    ctx.translate(x + w / 2, y + h / 2);
+    ctx.rotate((rect.rot * Math.PI) / 180);
+    ctx.shadowColor = 'rgba(0,0,0,0.55)';
+    ctx.shadowBlur = w * 0.04;
+    ctx.shadowOffsetY = w * 0.015;
+    if (pad) {
+      ctx.fillStyle = '#fdf6ec';
+      ctx.fillRect(-w / 2, -h / 2, w, h);
     }
-    ctx.drawImage(img, panel.x + (panel.w - pw) / 2 + ox, panel.y + (panel.h - ph) / 2 + oy + topBias, pw, ph);
-    ctx.restore();
+    ctx.drawImage(tmp, -pw / 2, -ph / 2, pw, ph);
   } else {
-    // Empty panel: a sunset gradient placeholder until a photo is picked.
-    const grad = ctx.createLinearGradient(panel.x, panel.y, panel.x + panel.w, panel.y + panel.h);
-    grad.addColorStop(0, '#ff9a5c');
-    grad.addColorStop(0.55, '#e84a7a');
-    grad.addColorStop(1, '#5b2a86');
-    ctx.fillStyle = grad;
-    ctx.fillRect(panel.x, panel.y, panel.w, panel.h);
-  }
-  ctx.restore();
-
-  // Frame each panel: a white snapshot border for the collage, a dark keyline otherwise.
-  ctx.save();
-  ctx.translate(cx, cy);
-  if (panel.rot) ctx.rotate((panel.rot * Math.PI) / 180);
-  ctx.translate(-cx, -cy);
-  ctx.lineWidth = snapshotBorder ? Math.max(6, 10 * scale) : Math.max(2, 3 * scale);
-  ctx.strokeStyle = snapshotBorder ? '#fdf6ec' : 'rgba(12, 6, 24, 0.85)';
-  ctx.strokeRect(panel.x, panel.y, panel.w, panel.h);
-  if (snapshotBorder) {
-    ctx.fillStyle = '#fdf6ec';
-    ctx.fillRect(panel.x - 4 * scale, panel.y + panel.h, panel.w + 8 * scale, 26 * scale);
-  }
-  ctx.restore();
-}
-
-/** Runs the grade LUT over the whole canvas, blended by `amount` (0..1). */
-export function applyGradeLUT(ctx, w, h, lut, amount) {
-  if (amount <= 0) return;
-  const image = ctx.getImageData(0, 0, w, h);
-  const d = image.data;
-  const a = Math.max(0, Math.min(1, amount));
-  for (let i = 0; i < d.length; i += 4) {
-    d[i] = d[i] + (lut.r[d[i]] - d[i]) * a;
-    d[i + 1] = d[i + 1] + (lut.g[d[i + 1]] - d[i + 1]) * a;
-    d[i + 2] = d[i + 2] + (lut.b[d[i + 2]] - d[i + 2]) * a;
-  }
-  ctx.putImageData(image, 0, 0);
-}
-
-/** Darkens the corners so the centre of the cover pops. */
-export function addVignette(ctx, w, h) {
-  const grad = ctx.createRadialGradient(
-    w / 2, h / 2, Math.min(w, h) * 0.42,
-    w / 2, h / 2, Math.max(w, h) * 0.75,
-  );
-  grad.addColorStop(0, 'rgba(10, 4, 24, 0)');
-  grad.addColorStop(1, 'rgba(10, 4, 24, 0.42)');
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, w, h);
-}
-
-/** A light dusting of film grain, seeded so every render matches. */
-export function addFilmGrain(ctx, w, h, seed) {
-  const rand = mulberry32(seed);
-  const step = Math.max(3, Math.round(w / 360));
-  ctx.save();
-  for (let y = 0; y < h; y += step) {
-    for (let x = 0; x < w; x += step) {
-      const v = rand();
-      if (v > 0.86) {
-        ctx.fillStyle = v > 0.93 ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.10)';
-        ctx.fillRect(x, y, step * 0.6, step * 0.6);
-      }
+    if (pad) {
+      ctx.fillStyle = '#fdf6ec';
+      ctx.fillRect(x, y, w, h);
     }
+    ctx.drawImage(tmp, x + pad, y + pad, pw, ph);
   }
   ctx.restore();
 }
 
-/** Shrinks the font until `text` fits `maxWidth`, then returns the size used. */
-export function fitTitleFont(ctx, text, maxWidth, startSize, family) {
-  let size = startSize;
-  ctx.font = `${size}px ${family}`;
-  while (ctx.measureText(text).width > maxWidth && size > 12) {
-    size -= 2;
-    ctx.font = `${size}px ${family}`;
-  }
-  return size;
-}
-
-/** A band of halftone dots behind the title, fading toward its top edge. */
-export function drawHalftoneBand(ctx, x, y, w, h, color) {
-  const gap = Math.max(10, w / 90);
+function halftoneBand(ctx, band, W) {
+  const { x, y, w, h } = band;
+  const grad = ctx.createLinearGradient(x, y, x + w, y);
+  grad.addColorStop(0, '#ff2e88');
+  grad.addColorStop(0.5, '#ff7a1a');
+  grad.addColorStop(1, '#ffd23e');
   ctx.save();
-  for (let row = 0; row * gap < h; row++) {
-    for (let col = 0; col * gap < w; col++) {
-      const fade = 1 - (row * gap) / h;
-      const r = gap * 0.16 + gap * 0.22 * fade * (0.5 + 0.5 * Math.sin(col * 0.9 + row));
-      ctx.fillStyle = color;
-      ctx.globalAlpha = 0.16 + 0.30 * fade;
+  ctx.fillStyle = grad;
+  ctx.globalAlpha = 0.92;
+  ctx.fillRect(x, y, w, h);
+  ctx.globalAlpha = 1;
+  // Rows of dots, shrinking toward the right edge — the classic poster halftone.
+  const step = Math.max(10, h / 5);
+  for (let row = 0; row < 4; row++) {
+    const cy = y + (row + 0.5) * (h / 4);
+    for (let cx = x + step / 2; cx < x + w; cx += step) {
+      const t = (cx - x) / w;
+      const r = step * 0.32 * (1 - t * 0.55) * (row % 2 === 0 ? 1 : 0.8);
       ctx.beginPath();
-      ctx.arc(x + col * gap, y + row * gap, r, 0, Math.PI * 2);
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(20,5,30,0.28)';
       ctx.fill();
     }
   }
   ctx.restore();
 }
 
-/** The top-left badge and the top-right five-star heat meter. */
-export function drawBadgeAndHeat(ctx, state, w, h, grade, scale) {
-  const pad = Math.round(Math.min(w, h) * 0.03);
+function drawLettering(ctx, W, H, state, band) {
+  const { x, y, w, h } = band;
+  const cx = x + w / 2;
+
+  // Title: Anton, sunset gradient, dark outline, hard drop shadow.
+  const title = (state.title || 'VICE COAST').toUpperCase();
+  const titleSize = Math.min(h * 0.52, (w * 0.92) / Math.max(4, title.length * 0.62));
   ctx.save();
+  ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  if (state.badge) {
-    const label = 'VICE COAST';
-    const fontSize = 44 * scale * 0.62;
-    ctx.font = `${fontSize}px Anton, sans-serif`;
-    const tw = ctx.measureText(label).width;
-    const pillH = 44 * scale;
-    const pillW = tw + 52 * scale;
-    ctx.fillStyle = 'rgba(12, 6, 24, 0.82)';
-    ctx.beginPath();
-    ctx.roundRect(pad, pad, pillW, pillH, pillH / 2);
-    ctx.fill();
-    ctx.strokeStyle = grade.accent;
-    ctx.lineWidth = 2.5 * scale;
-    ctx.stroke();
-    ctx.fillStyle = '#ffffff';
-    ctx.textAlign = 'left';
-    ctx.fillText(label, pad + 26 * scale, pad + pillH / 2 + 1 * scale);
+  ctx.font = `${titleSize}px Anton, sans-serif`;
+  const ty = y + h * 0.42;
+  const tGrad = ctx.createLinearGradient(cx - w * 0.4, ty, cx + w * 0.4, ty);
+  tGrad.addColorStop(0, '#ffd23e');
+  tGrad.addColorStop(0.45, '#ff7a1a');
+  tGrad.addColorStop(1, '#ff2e88');
+  ctx.shadowColor = 'rgba(10,2,20,0.85)';
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = titleSize * 0.07;
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = titleSize * 0.10;
+  ctx.strokeStyle = '#160a24';
+  ctx.strokeText(title, cx, ty);
+  ctx.fillStyle = tGrad;
+  ctx.fillText(title, cx, ty);
+  ctx.restore();
+
+  // Subtitle: Pacifico script under the title.
+  const sub = state.subtitle || '';
+  if (sub) {
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = `${Math.min(h * 0.20, 44 * (W / 1080))}px Pacifico, cursive`;
+    ctx.fillStyle = '#fff7ea';
+    ctx.shadowColor = 'rgba(10,2,20,0.7)';
+    ctx.shadowBlur = 6;
+    ctx.shadowOffsetY = 2;
+    ctx.fillText(sub, cx, y + h * 0.82);
+    ctx.restore();
   }
-  // Heat meter: five stars, filled up to `state.stars`.
-  const star = (cx, cy, r, filled) => {
-    ctx.beginPath();
-    for (let i = 0; i < 10; i++) {
-      const ang = (Math.PI / 5) * i - Math.PI / 2;
-      const rad = i % 2 === 0 ? r : r * 0.45;
-      const px = cx + Math.cos(ang) * rad;
-      const py = cy + Math.sin(ang) * rad;
-      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
-    }
-    ctx.closePath();
-    ctx.fillStyle = filled ? '#ffd23d' : 'rgba(255,255,255,0.28)';
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(12, 6, 24, 0.7)';
-    ctx.lineWidth = 1.5 * scale;
-    ctx.stroke();
-  };
-  const r = 15 * scale;
-  const gap = 34 * scale;
-  const total = gap * 4 + r * 2;
+
+  // Badge pill, top-left.
+  const badge = (state.badge || 'VICE COAST').toUpperCase();
+  const bs = Math.max(15, W * 0.016);
+  ctx.save();
+  ctx.font = `${bs}px Anton, sans-serif`;
+  const bw = ctx.measureText(badge).width + bs * 2.2;
+  const bh = bs * 2.1;
+  const bx = W * 0.03;
+  const by = H * 0.025;
+  ctx.fillStyle = 'rgba(13,7,22,0.72)';
+  ctx.strokeStyle = '#ff2e88';
+  ctx.lineWidth = Math.max(2, W * 0.002);
+  roundRect(ctx, bx, by, bw, bh, bh / 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = '#ff5da2';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(badge, bx + bw / 2, by + bh / 2 + 1);
+  ctx.restore();
+
+  // Five-star heat meter, top-right.
+  const heat = Math.max(1, Math.min(5, state.heat || 4));
+  const sr = Math.max(11, W * 0.014);
+  const gap = sr * 2.4;
+  const total = gap * 5;
+  const sx = W - W * 0.03 - total;
+  const sy = H * 0.025 + sr * 1.4;
+  ctx.save();
+  ctx.font = `${Math.max(11, W * 0.011)}px Anton, sans-serif`;
+  ctx.fillStyle = 'rgba(255,255,255,0.85)';
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('HEAT', sx - sr, sy);
   for (let i = 0; i < 5; i++) {
-    star(w - pad - total + r + i * gap, pad + 22 * scale, r, i < state.stars);
+    drawStar(ctx, sx + i * gap + sr, sy, sr, i < heat ? '#ffd23e' : 'rgba(255,255,255,0.28)');
   }
   ctx.restore();
 }
 
-/** The caption: halftone band, gradient Anton title, Pacifico subtitle. */
-export function drawTitleBlock(ctx, state, w, h, grade, scale) {
-  const title = (state.caption || '').trim().toUpperCase();
-  const subtitle = (state.subtitle || '').trim();
-  if (!title && !subtitle) return;
-  const bandH = h * 0.20;
-  const bandY = h - bandH;
-  // A dark shelf the lettering sits on, so it reads over any photo.
-  const shelf = ctx.createLinearGradient(0, bandY, 0, h);
-  shelf.addColorStop(0, 'rgba(12, 6, 24, 0)');
-  shelf.addColorStop(0.35, 'rgba(12, 6, 24, 0.72)');
-  shelf.addColorStop(1, 'rgba(12, 6, 24, 0.92)');
-  ctx.fillStyle = shelf;
-  ctx.fillRect(0, bandY, w, bandH);
-  drawHalftoneBand(ctx, 0, bandY, w, bandH * 0.5, grade.accent);
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
 
+function grain(ctx, W, H) {
+  const pat = ctx.createPattern(grainTile, 'repeat');
   ctx.save();
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'alphabetic';
-  const maxW = w * 0.92;
-  if (title) {
-    const size = fitTitleFont(ctx, title, maxW, h * 0.115, 'Anton, sans-serif');
-    const ty = h - h * 0.045 - (subtitle ? h * 0.045 : 0);
-    const grad = ctx.createLinearGradient(0, ty - size, 0, ty);
-    grad.addColorStop(0, grade.titleTop);
-    grad.addColorStop(1, grade.titleBottom);
-    ctx.font = `${size}px Anton, sans-serif`;
-    ctx.lineJoin = 'round';
-    ctx.strokeStyle = '#14082b';
-    ctx.lineWidth = Math.max(4, size * 0.14);
-    ctx.shadowColor = 'rgba(0, 0, 0, 0.55)';
-    ctx.shadowBlur = size * 0.18;
-    ctx.shadowOffsetY = size * 0.05;
-    ctx.strokeText(title, w / 2, ty);
-    ctx.fillStyle = grad;
-    ctx.fillText(title, w / 2, ty);
-    ctx.shadowColor = 'transparent';
-    ctx.shadowBlur = 0;
-    ctx.shadowOffsetY = 0;
-  }
-  if (subtitle) {
-    const subSize = Math.max(20, h * 0.032);
-    ctx.font = `${subSize}px Pacifico, cursive`;
-    ctx.fillStyle = '#ffffff';
-    ctx.shadowColor = 'rgba(0, 0, 0, 0.6)';
-    ctx.shadowBlur = subSize * 0.25;
-    ctx.fillText(subtitle, w / 2, h - h * 0.028);
-    ctx.shadowBlur = 0;
-  }
+  ctx.globalAlpha = 0.08;
+  ctx.globalCompositeOperation = 'overlay';
+  ctx.fillStyle = pat;
+  ctx.fillRect(0, 0, W, H);
   ctx.restore();
+}
+
+function vignette(ctx, W, H) {
+  const g = ctx.createRadialGradient(
+    W / 2, H / 2, Math.min(W, H) * 0.42,
+    W / 2, H / 2, Math.max(W, H) * 0.75,
+  );
+  g.addColorStop(0, 'rgba(0,0,0,0)');
+  g.addColorStop(1, 'rgba(10,2,20,0.42)');
+  ctx.save();
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+  ctx.restore();
+}
+
+// The one render path. `photos` is an array of loaded <img>/canvas images.
+// `state.crops` is parallel to the layout's panels: {photo, zoom, panX, panY, flip}.
+export function renderCover(ctx, W, H, state, photos) {
+  const layout = layoutById(state.layoutId);
+  const grade = gradeById(state.gradeId);
+  const strength = (state.strength ?? 80) / 100;
+  const sat = 1 + (grade.sat - 1) * strength;
+  const luts = buildLuts(grade, strength);
+
+  // Sunset backdrop shows through the gaps between panels.
+  const bg = ctx.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, '#1b0b33');
+  bg.addColorStop(0.55, '#3d1158');
+  bg.addColorStop(0.8, '#a4135c');
+  bg.addColorStop(1, '#ff7a1a');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, W, H);
+
+  const rects = panelRects(layout, W, H);
+  rects.forEach((rect, i) => {
+    const crop = (state.crops && state.crops[i]) || { photo: 0, zoom: 1, panX: 0.5, panY: 0.5, flip: false };
+    const photo = photos[crop.photo] || photos[0] || null;
+    drawPanel(ctx, photo, rect, crop, luts, sat);
+  });
+
+  const band = {
+    x: layout.titleBand.x * W,
+    y: layout.titleBand.y * H,
+    w: layout.titleBand.w * W,
+    h: layout.titleBand.h * H,
+  };
+  if (state.halftone !== false) halftoneBand(ctx, band, W);
+  drawLettering(ctx, W, H, state, band);
+
+  if (state.grain !== false) grain(ctx, W, H);
+  if (state.vignette !== false) vignette(ctx, W, H);
+}
+
+// Await the two display fonts so lettering never falls back to a system font.
+export async function loadFonts() {
+  try {
+    await Promise.all([
+      document.fonts.load('40px Anton'),
+      document.fonts.load('40px Pacifico'),
+      document.fonts.ready,
+    ]);
+  } catch (e) {
+    // Fonts still render from @font-face on next paint; never block the app.
+  }
 }
